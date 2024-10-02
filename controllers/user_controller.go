@@ -12,108 +12,66 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Tạo user mới (POST /users)
-func CreateUser(c *gin.Context) {
+// Đăng ký người dùng (POST /users/register)
+func RegisterUser(c *gin.Context) {
+	var user models.User
 	var collection = config.GetCollection("users")
 
-	var user models.User
+	// Bind dữ liệu JSON vào struct User
 	if err := c.ShouldBindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	// Kiểm tra xem email đã tồn tại hay chưa
+	var existingUser models.User
+	err := collection.FindOne(context.TODO(), bson.M{"email": user.Email}).Decode(&existingUser)
+	if err == nil {
+		c.JSON(http.StatusConflict, gin.H{"message": "Email đã tồn tại"})
+		return
+	}
+
+	// Tạo ObjectID mới cho người dùng
 	user.ID = primitive.NewObjectID()
-	insertResult, err := collection.InsertOne(context.TODO(), user)
+
+	// Thêm người dùng vào cơ sở dữ liệu
+	_, err = collection.InsertOne(context.TODO(), user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể thêm user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Lỗi khi tạo người dùng"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Đã thêm user", "userID": insertResult.InsertedID})
+
+	c.JSON(http.StatusCreated, gin.H{"message": "Đăng ký thành công", "user": user})
 }
 
-// Lấy danh sách tất cả users (GET /users)
-func GetUsers(c *gin.Context) {
+// Đăng nhập người dùng (POST /users/login)
+func LoginUser(c *gin.Context) {
+	var loginData struct {
+		Email string `json:"email" binding:"required"`
+		Pass  string `json:"pass" binding:"required"`
+	}
 	var collection = config.GetCollection("users")
 
-	cursor, err := collection.Find(context.TODO(), bson.D{})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể truy xuất danh sách users"})
-		return
-	}
-	var users []models.User
-	if err = cursor.All(context.TODO(), &users); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi xử lý dữ liệu"})
-		return
-	}
-	c.JSON(http.StatusOK, users)
-}
-
-// Lấy thông tin user theo ID (GET /users/:id)
-func GetUserByID(c *gin.Context) {
-	id := c.Param("id")
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID không hợp lệ"})
-		return
-	}
-
-	var user models.User
-	var collection = config.GetCollection("users")
-
-	err = collection.FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&user)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy user"})
-		return
-	}
-	c.JSON(http.StatusOK, user)
-}
-
-// Cập nhật user theo ID (PUT /users/:id)
-func UpdateUser(c *gin.Context) {
-	id := c.Param("id")
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID không hợp lệ"})
-		return
-	}
-
-	var user models.User
-	if err := c.ShouldBindJSON(&user); err != nil {
+	// Bind dữ liệu JSON vào struct loginData
+	if err := c.ShouldBindJSON(&loginData); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	update := bson.M{
-		"$set": bson.M{
-			"name":  user.Name,
-			"email": user.Email,
-			"age":   user.Age,
-		},
-	}
-	var collection = config.GetCollection("users")
-
-	_, err = collection.UpdateOne(context.TODO(), bson.M{"_id": objID}, update)
+	// Tìm kiếm người dùng theo email
+	var user models.User
+	err := collection.FindOne(context.TODO(), bson.M{"email": loginData.Email}).Decode(&user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể cập nhật user"})
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Email hoặc mật khẩu không chính xác"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "User đã được cập nhật"})
-}
 
-// Xóa user theo ID (DELETE /users/:id)
-func DeleteUser(c *gin.Context) {
-	id := c.Param("id")
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ID không hợp lệ"})
+	// Kiểm tra mật khẩu
+	if user.Pass != loginData.Pass {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Email hoặc mật khẩu không chính xác"})
 		return
 	}
-	var collection = config.GetCollection("users")
 
-	_, err = collection.DeleteOne(context.TODO(), bson.M{"_id": objID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể xóa user"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "User đã được xóa"})
+	// Đăng nhập thành công
+	c.JSON(http.StatusOK, gin.H{"message": "Đăng nhập thành công", "user": user})
 }
